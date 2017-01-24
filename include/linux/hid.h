@@ -459,6 +459,7 @@ struct hid_device {							/* device report descriptor */
 	enum hid_type type;						/* device type (mouse, kbd, ...) */
 	unsigned country;						/* HID country */
 	struct hid_report_enum report_enum[HID_REPORT_TYPES];
+	struct work_struct led_work;					/* delayed LED worker */
 
 	struct semaphore driver_lock;					/* protects the current driver, except during input */
 	struct semaphore driver_input_lock;				/* protects the current driver */
@@ -670,11 +671,12 @@ struct hid_driver {
  * @stop: called on remove
  * @open: called by input layer on open
  * @close: called by input layer on close
- * @hidinput_input_event: event input event (e.g. ff or leds)
  * @parse: this method is called only once to parse the device data,
  *	   shouldn't allocate anything to not leak memory
  * @request: send report request to device (e.g. feature report)
  * @wait: wait for buffered io to complete (send/recv reports)
+ * @raw_request: send raw report request to device (e.g. feature report)
+ * @output_report: send output report to device
  * @idle: send idle request to device
  */
 struct hid_ll_driver {
@@ -686,17 +688,20 @@ struct hid_ll_driver {
 
 	int (*power)(struct hid_device *hdev, int level);
 
-	int (*hidinput_input_event) (struct input_dev *idev, unsigned int type,
-			unsigned int code, int value);
-
 	int (*parse)(struct hid_device *hdev);
 
 	void (*request)(struct hid_device *hdev,
 			struct hid_report *report, int reqtype);
 
 	int (*wait)(struct hid_device *hdev);
-	int (*idle)(struct hid_device *hdev, int report, int idle, int reqtype);
 
+	int (*raw_request) (struct hid_device *hdev, unsigned char reportnum,
+			    __u8 *buf, size_t len, unsigned char rtype,
+			    int reqtype);
+
+	int (*output_report) (struct hid_device *hdev, __u8 *buf, size_t len);
+
+	int (*idle)(struct hid_device *hdev, int report, int idle, int reqtype);
 };
 
 #define	PM_HINT_FULLON	1<<5
@@ -747,6 +752,7 @@ struct hid_field *hidinput_get_led_field(struct hid_device *hid);
 unsigned int hidinput_count_leds(struct hid_device *hid);
 __s32 hidinput_calc_abs_res(const struct hid_field *field, __u16 code);
 void hid_output_report(struct hid_report *report, __u8 *data);
+void __hid_request(struct hid_device *hid, struct hid_report *rep, int reqtype);
 u8 *hid_alloc_report_buf(struct hid_report *report, gfp_t flags);
 struct hid_device *hid_allocate_device(void);
 struct hid_report *hid_register_report(struct hid_device *device, unsigned type, unsigned id);
@@ -959,7 +965,52 @@ static inline void hid_hw_request(struct hid_device *hdev,
 				  struct hid_report *report, int reqtype)
 {
 	if (hdev->ll_driver->request)
-		hdev->ll_driver->request(hdev, report, reqtype);
+		return hdev->ll_driver->request(hdev, report, reqtype);
+
+	__hid_request(hdev, report, reqtype);
+}
+
+/**
+ * hid_hw_raw_request - send report request to device
+ *
+ * @hdev: hid device
+ * @reportnum: report ID
+ * @buf: in/out data to transfer
+ * @len: length of buf
+ * @rtype: HID report type
+ * @reqtype: HID_REQ_GET_REPORT or HID_REQ_SET_REPORT
+ *
+ * @return: count of data transfered, negative if error
+ *
+ * Same behavior as hid_hw_request, but with raw buffers instead.
+ */
+static inline int hid_hw_raw_request(struct hid_device *hdev,
+				  unsigned char reportnum, __u8 *buf,
+				  size_t len, unsigned char rtype, int reqtype)
+{
+	if (hdev->ll_driver->raw_request)
+		return hdev->ll_driver->raw_request(hdev, reportnum, buf, len,
+						    rtype, reqtype);
+
+	return -ENOSYS;
+}
+
+/**
+ * hid_hw_output_report - send output report to device
+ *
+ * @hdev: hid device
+ * @buf: raw data to transfer
+ * @len: length of buf
+ *
+ * @return: count of data transfered, negative if error
+ */
+static inline int hid_hw_output_report(struct hid_device *hdev, __u8 *buf,
+					size_t len)
+{
+	if (hdev->ll_driver->output_report)
+		return hdev->ll_driver->output_report(hdev, buf, len);
+
+	return -ENOSYS;
 }
 
 /**
@@ -997,7 +1048,6 @@ int hid_report_raw_event(struct hid_device *hid, int type, u8 *data, int size,
 u32 usbhid_lookup_quirk(const u16 idVendor, const u16 idProduct);
 int usbhid_quirks_init(char **quirks_param);
 void usbhid_quirks_exit(void);
-void usbhid_set_leds(struct hid_device *hid);
 
 #ifdef CONFIG_HID_PID
 int hid_pidff_init(struct hid_device *hid);

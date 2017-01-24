@@ -331,6 +331,15 @@ static int xhci_abort_cmd_ring(struct xhci_hcd *xhci)
 	ret = xhci_handshake(xhci, &xhci->op_regs->cmd_ring,
 			CMD_RING_RUNNING, 0, 5 * 1000 * 1000);
 	if (ret < 0) {
+		/* we are about to kill xhci, give it one more chance */
+		xhci_write_64(xhci, temp_64 | CMD_RING_ABORT,
+			      &xhci->op_regs->cmd_ring);
+		udelay(1000);
+		ret = xhci_handshake(xhci, &xhci->op_regs->cmd_ring,
+				CMD_RING_RUNNING, 0, 3 * 1000 * 1000);
+		if (ret == 0)
+			return 0;
+
 		xhci_err(xhci, "Stopped the command ring failed, "
 				"maybe the host is dead\n");
 		xhci->xhc_state |= XHCI_STATE_DYING;
@@ -790,8 +799,6 @@ static void handle_stopped_endpoint(struct xhci_hcd *xhci,
 
 	struct xhci_dequeue_state deq_state;
 
-	if (xhci->main_hcd->driver->set_autosuspend)
-		xhci->main_hcd->driver->set_autosuspend(xhci->main_hcd, 1);
 	if (unlikely(TRB_TO_SUSPEND_PORT(
 			     le32_to_cpu(xhci->cmd_ring->dequeue->generic.field[3])))) {
 		slot_id = TRB_TO_SLOT_ID(
@@ -954,8 +961,6 @@ void xhci_stop_endpoint_command_watchdog(unsigned long arg)
 
 	spin_lock_irqsave(&xhci->lock, flags);
 
-	if (xhci->main_hcd->driver->set_autosuspend)
-		xhci->main_hcd->driver->set_autosuspend(xhci->main_hcd, 1);
 	ep->stop_cmds_pending--;
 	if (xhci->xhc_state & XHCI_STATE_DYING) {
 		xhci_dbg(xhci, "Stop EP timer ran, but another timer marked "
@@ -1717,10 +1722,11 @@ static void handle_port_status(struct xhci_hcd *xhci,
 			 */
 			bogus_port_status = true;
 			goto cleanup;
-		} else {
+		} else if (!test_bit(faked_port_index,
+				     &bus_state->resuming_ports)) {
 			xhci_dbg(xhci, "resume HS port %d\n", port_id);
 			bus_state->resume_done[faked_port_index] = jiffies +
-				msecs_to_jiffies(40);
+				msecs_to_jiffies(USB_RESUME_TIMEOUT);
 			set_bit(faked_port_index, &bus_state->resuming_ports);
 			mod_timer(&hcd->rh_timer,
 				  bus_state->resume_done[faked_port_index]);

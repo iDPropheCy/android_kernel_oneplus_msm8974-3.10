@@ -46,6 +46,9 @@
 
 #define MAX_TUNING_LOOP 40
 
+#define SDHCI_DBG_DUMP_RS_INTERVAL (10 * HZ)
+#define SDHCI_DBG_DUMP_RS_BURST 2
+
 static unsigned int debug_quirks = 0;
 static unsigned int debug_quirks2;
 
@@ -1559,6 +1562,9 @@ static int sdhci_notify_load(struct mmc_host *mmc, enum mmc_load state)
 	case MMC_LOAD_HIGH:
 		sdhci_update_power_policy(host, SDHCI_PERFORMANCE_MODE);
 		break;
+	case MMC_LOAD_INIT:
+		sdhci_update_power_policy(host, SDHCI_PERFORMANCE_MODE_INIT);
+		break;
 	case MMC_LOAD_LOW:
 		sdhci_update_power_policy(host, SDHCI_POWER_SAVE_MODE);
 		break;
@@ -2775,7 +2781,7 @@ static void sdhci_cmd_irq(struct sdhci_host *host, u32 intmask)
 
 	if (intmask & SDHCI_INT_AUTO_CMD_ERR) {
 		auto_cmd_status = host->auto_cmd_err_sts;
-		pr_err("%s: %s: AUTO CMD err sts 0x%08x\n",
+		pr_err_ratelimited("%s: %s: AUTO CMD err sts 0x%08x\n",
 			mmc_hostname(host->mmc), __func__, auto_cmd_status);
 		if (auto_cmd_status & (SDHCI_AUTO_CMD12_NOT_EXEC |
 				       SDHCI_AUTO_CMD_INDEX_ERR |
@@ -2929,7 +2935,7 @@ static void sdhci_data_irq(struct sdhci_host *host, u32 intmask)
 		} else {
 			pr_msg = true;
 		}
-		if (pr_msg) {
+		if (pr_msg && __ratelimit(&host->dbg_dump_rs)) {
 			pr_err("%s: data txfr (0x%08x) error: %d after %lld ms\n",
 			       mmc_hostname(host->mmc), intmask,
 			       host->data->error, ktime_to_ms(ktime_sub(
@@ -3358,6 +3364,8 @@ struct sdhci_host *sdhci_alloc_host(struct device *dev,
 
 	spin_lock_init(&host->lock);
 	mutex_init(&host->ios_mutex);
+	ratelimit_state_init(&host->dbg_dump_rs, SDHCI_DBG_DUMP_RS_INTERVAL,
+			SDHCI_DBG_DUMP_RS_BURST);
 
 	return host;
 }
@@ -3530,6 +3538,7 @@ int sdhci_add_host(struct sdhci_host *host)
 			>> SDHCI_CLOCK_BASE_SHIFT;
 
 	host->max_clk *= 1000000;
+	sdhci_update_power_policy(host, SDHCI_PERFORMANCE_MODE_INIT);
 	if (host->max_clk == 0 || host->quirks &
 			SDHCI_QUIRK_CAP_CLOCK_BASE_BROKEN) {
 		if (!host->ops->get_max_clock) {
@@ -3935,7 +3944,6 @@ int sdhci_add_host(struct sdhci_host *host)
 
 	if (caps[0] & SDHCI_ASYNC_INTR)
 		host->async_int_supp = true;
-	mmc_add_host(mmc);
 
 	if (host->quirks2 & SDHCI_QUIRK2_IGN_DATA_END_BIT_ERROR)
 		sdhci_clear_set_irqs(host, SDHCI_INT_DATA_END_BIT, 0);
@@ -3948,6 +3956,7 @@ int sdhci_add_host(struct sdhci_host *host)
 
 	sdhci_enable_card_detection(host);
 
+	mmc_add_host(mmc);
 	return 0;
 
 #ifdef SDHCI_USE_LEDS_CLASS
@@ -3985,6 +3994,7 @@ void sdhci_remove_host(struct sdhci_host *host, int dead)
 		spin_unlock_irqrestore(&host->lock, flags);
 	}
 
+	sdhci_update_power_policy(host, SDHCI_POWER_SAVE_MODE);
 	sdhci_disable_card_detection(host);
 
 	if (host->cpu_dma_latency_us)

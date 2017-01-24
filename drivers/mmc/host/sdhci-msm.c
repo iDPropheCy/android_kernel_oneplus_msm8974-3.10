@@ -121,8 +121,10 @@ enum sdc_mpm_pin_state {
 #define CORE_DLL_CONFIG_2	0x1B4
 #define CORE_DDR_CAL_EN		(1 << 0)
 
-#define CORE_DDR_CONFIG		0x1B8
-#define DDR_CONFIG_POR_VAL	0x80040853
+#define CORE_DDR_CONFIG			0x1B8
+#define DDR_CONFIG_POR_VAL		0x80040853
+#define DDR_CONFIG_PRG_RCLK_DLY_MASK	0x1FF
+#define DDR_CONFIG_PRG_RCLK_DLY		115
 
 #define CORE_CSR_CDC_CTLR_CFG0		0x130
 #define CORE_SW_TRIG_FULL_CALIB		(1 << 16)
@@ -902,19 +904,18 @@ out:
 
 static int sdhci_msm_cm_dll_sdc4_calibration(struct sdhci_host *host)
 {
-	u32 dll_status;
+	u32 dll_status, ddr_config;
 	int ret = 0;
 
 	pr_debug("%s: Enter %s\n", mmc_hostname(host->mmc), __func__);
 
 	/*
-	 * Currently the CORE_DDR_CONFIG register defaults to desired
-	 * configuration on reset. Currently reprogramming the power on
-	 * reset (POR) value in case it might have been modified by
-	 * bootloaders. In the future, if this changes, then the desired
-	 * values will need to be programmed appropriately.
+	 * Reprogramming the value in case it might have been modified by
+	 * bootloaders.
 	 */
-	writel_relaxed(DDR_CONFIG_POR_VAL, host->ioaddr + CORE_DDR_CONFIG);
+	ddr_config = DDR_CONFIG_POR_VAL & ~DDR_CONFIG_PRG_RCLK_DLY_MASK;
+	ddr_config |= DDR_CONFIG_PRG_RCLK_DLY;
+	writel_relaxed(ddr_config, host->ioaddr + CORE_DDR_CONFIG);
 
 	/* Write 1 to DDR_CAL_EN field in CORE_DLL_CONFIG_2 */
 	writel_relaxed((readl_relaxed(host->ioaddr + CORE_DLL_CONFIG_2)
@@ -1021,6 +1022,7 @@ int sdhci_msm_execute_tuning(struct sdhci_host *host, u32 opcode)
 	struct mmc_ios	ios = host->mmc->ios;
 	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
 	struct sdhci_msm_host *msm_host = pltfm_host->priv;
+	int search_retries = 3;
 	u8 drv_type = 0;
 	bool drv_type_changed = false;
 	struct mmc_card *card = host->mmc->card;
@@ -1207,6 +1209,20 @@ retry:
 kfree:
 	kfree(data_buf);
 out:
+	if (card && card->quirks & MMC_QUIRK_SEC_SEARCH_TUNE) {
+		while (search_retries--) {
+			struct mmc_command cmd = {0};
+			cmd.opcode = MMC_SEND_STATUS;
+			if (!mmc_host_is_spi(card->host))
+				cmd.arg = card->rca << 16;
+			cmd.flags = MMC_RSP_SPI_R2 | MMC_RSP_R1 | MMC_CMD_AC;
+			rc = mmc_wait_for_cmd(card->host, &cmd, 3);
+			if (!rc)
+				break;
+			msleep(10);
+		}
+	}
+
 	spin_lock_irqsave(&host->lock, flags);
 	if (!rc)
 		msm_host->tuning_done = true;
@@ -3516,6 +3532,7 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 	msm_host->mmc->caps2 |= MMC_CAP2_ASYNC_SDIO_IRQ_4BIT_MODE;
 	msm_host->mmc->pm_caps |= MMC_PM_KEEP_POWER | MMC_PM_WAKE_SDIO_IRQ;
 	msm_host->mmc->caps2 |= MMC_CAP2_CORE_PM;
+	msm_host->mmc->caps2 |= MMC_CAP2_SANITIZE;
 
 	if (msm_host->pdata->nonremovable)
 		msm_host->mmc->caps |= MMC_CAP_NONREMOVABLE;
