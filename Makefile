@@ -240,10 +240,12 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
 	  else if [ -x /bin/bash ]; then echo /bin/bash; \
 	  else echo sh; fi ; fi)
 
-HOSTCC       = $(CCACHE) gcc
-HOSTCXX      = $(CCACHE) g++
-HOSTCFLAGS   = -Wall -Wmissing-prototypes -Wstrict-prototypes -O2 -fomit-frame-pointer
-HOSTCXXFLAGS = -O2
+GRAPHITE = -fgraphite -fgraphite-identity -floop-interchange -ftree-loop-linear -floop-strip-mine -floop-block -floop-parallelize-all -floop-nest-optimize
+
+HOSTCC       = gcc
+HOSTCXX      = g++
+HOSTCFLAGS   = -Wall -Wmissing-prototypes -Wstrict-prototypes -pipe -g0 -DNDEBUG -O3 -fno-toplevel-reorder -fuse-linker-plugin -flto=4 -fomit-frame-pointer -fopenmp $(GRAPHITE)
+HOSTCXXFLAGS = -pipe -g0 -DNDEBUG -O3 -fno-toplevel-reorder -fuse-linker-plugin -flto=4 $(GRAPHITE)
 
 # Decide whether to build built-in, modular, or both.
 # Normally, just do built-in.
@@ -325,9 +327,41 @@ include $(srctree)/scripts/Kbuild.include
 
 # Make variables (CC, etc...)
 
+GCC_OPT		:=	-marm \
+			-mcpu=cortex-a15 \
+			-mtune=cortex-a15 \
+			-mvectorize-with-neon-quad \
+			-mfpu=neon-vfpv4 \
+			-mfloat-abi=softfp \
+			-munaligned-access \
+			--param l1-cache-size=16 \
+			--param l1-cache-line-size=16 \
+			--param l2-cache-size=2048 \
+			-ffast-math \
+			-O3 \
+			-pipe \
+			-g0 \
+			-DNDEBUG \
+			-fomit-frame-pointer \
+			-fmodulo-sched \
+			-fmodulo-sched-allow-regmoves \
+			-fivopts \
+			-ftree-loop-vectorize \
+			-ftree-slp-vectorize \
+			-fvect-cost-model \
+			-fsingle-precision-constant \
+			-fpredictive-commoning \
+			-fopenmp \
+			-fsanitize=leak \
+			-Wno-maybe-uninitialized \
+			-Wno-misleading-indentation \
+			-Wno-array-bounds \
+			-Wno-shift-overflow \
+			$(GRAPHITE)
+
 AS		= $(CROSS_COMPILE)as
-LD		= $(CROSS_COMPILE)ld
-CC		= $(CCACHE) $(CROSS_COMPILE)gcc
+LD		= $(CROSS_COMPILE)ld.gold -O3 --strip-debug
+CC		= $(CROSS_COMPILE)gcc $(GCC_OPT)
 CPP		= $(CC) -E
 AR		= $(CROSS_COMPILE)ar
 NM		= $(CROSS_COMPILE)nm
@@ -373,6 +407,7 @@ KBUILD_CPPFLAGS := -D__KERNEL__
 KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs \
 		   -fno-strict-aliasing -fno-common \
 		   -Werror-implicit-function-declaration \
+		   -mcpu=cortex-a15 -mtune=cortex-a15 \
 		   -Wno-format-security \
 		   -fno-delete-null-pointer-checks
 KBUILD_AFLAGS_KERNEL :=
@@ -608,7 +643,7 @@ all: vmlinux
 ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
 KBUILD_CFLAGS	+= -Os $(call cc-disable-warning,maybe-uninitialized,)
 else
-KBUILD_CFLAGS	+= -O2
+KBUILD_CFLAGS	+= -O3 $(call cc-disable-warning,maybe-uninitialized,)
 endif
 
 include $(srctree)/arch/$(SRCARCH)/Makefile
