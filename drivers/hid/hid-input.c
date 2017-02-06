@@ -258,6 +258,7 @@ __s32 hidinput_calc_abs_res(const struct hid_field *field, __u16 code)
 	case ABS_RX:
 	case ABS_RY:
 	case ABS_RZ:
+	case ABS_WHEEL:
 	case ABS_TILT_X:
 	case ABS_TILT_Y:
 		if (field->unit == 0x14) {		/* If degrees */
@@ -903,6 +904,10 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 		goto ignore;
 
 	case HID_UP_LOGIVENDOR:
+		/* intentional fallback */
+	case HID_UP_LOGIVENDOR2:
+		/* intentional fallback */
+	case HID_UP_LOGIVENDOR3:
 		goto ignore;
 
 	case HID_UP_PID:
@@ -1200,15 +1205,18 @@ static void hidinput_led_worker(struct work_struct *work)
 		return;
 
 	hid_output_report(report, buf);
+
 	/* synchronous output report */
-	if(hid->hid_output_raw_report)
-		hid->hid_output_raw_report(hid, buf, len, HID_OUTPUT_REPORT);
-	else {
-		ret = hid_hw_output_report(hid, buf, len);
-		if (ret == -ENOSYS)
-			hid_hw_raw_request(hid, report->id, buf, len, HID_OUTPUT_REPORT,
+	ret = hid_hw_output_report(hid, buf, len);
+	if (ret == -ENOSYS) {
+		ret = hid_hw_raw_request(hid, report->id, buf, len, HID_OUTPUT_REPORT,
 					HID_REQ_SET_REPORT);
+		if (ret == -ENOSYS) {
+			if(hid->hid_output_raw_report)
+				hid->hid_output_raw_report(hid, buf, len, HID_OUTPUT_REPORT);
+		}
 	}
+
 	kfree(buf);
 }
 
