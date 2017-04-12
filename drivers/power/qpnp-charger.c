@@ -1107,7 +1107,7 @@ qpnp_chg_is_ichg_loop_active(struct qpnp_chg_chip *chip)
 #define QPNP_CHG_I_MAX_MIN_100		100
 #define QPNP_CHG_I_MAX_MIN_150		150
 #define QPNP_CHG_I_MAX_MIN_MA		200
-#define QPNP_CHG_I_MAX_MAX_MA		2500
+#define QPNP_CHG_I_MAX_MAX_MA		3000 //2500
 #define QPNP_CHG_I_MAXSTEP_MA		100
 static int
 qpnp_chg_idcmax_set(struct qpnp_chg_chip *chip, int mA)
@@ -2175,7 +2175,7 @@ qpnp_chg_set_appropriate_vddmax(struct qpnp_chg_chip *chip)
 		qpnp_chg_vddmax_set(chip,4000);
 	else if(chip->mBatteryTempRegion == CV_BATTERY_TEMP_REGION__COOL)
 		qpnp_chg_vddmax_set(chip,chip->cool_bat_mv); /* yangfangbiao@oneplus.cn, 2015/01/06  Add for  sync with KK charge standard  */
-	else if(chip->mBatteryTempRegion == CV_BATTERY_TEMP_REGION__COOL)
+	else if(chip->mBatteryTempRegion == CV_BATTERY_TEMP_REGION__LITTLE_COOL)
 		qpnp_chg_vddmax_set(chip,chip->little_cool_bat_mv); /* yangfangbiao@oneplus.cn, 2015/01/06  Add for  sync with KK charge standard  */
 	else if(chip->mBatteryTempRegion == CV_BATTERY_TEMP_REGION__WARM)
 		qpnp_chg_vddmax_set(chip,chip->warm_bat_mv);
@@ -7532,7 +7532,7 @@ static int handle_batt_temp_warm(struct qpnp_chg_chip *chip)
 	if(qpnp_battery_temp_region_get(chip) != CV_BATTERY_TEMP_REGION__WARM)
 	{
 	    
-		pr_info("Battery temp. is between 45C and 55C, charge speed decreasing.\n");
+		pr_info("Battery temp. is between 45C and 55C, charge being capped to 60 percent and 900 mA.\n");
 		if(qpnp_battery_temp_region_get(chip) == CV_BATTERY_TEMP_REGION__HOT || 
 			qpnp_battery_temp_region_get(chip) == CV_BATTERY_TEMP_REGION__COLD)
 			qpnp_chg_charge_en(chip, !chip->charging_disabled);
@@ -8030,7 +8030,7 @@ static void update_heartbeat(struct work_struct *work)
 	cap = get_prop_capacity(chip);
 
 	if(is_there_charger) {
-		if(cap >= charge_limit) {
+		if(cap >= charge_limit || (qpnp_battery_temp_region_get(chip) == CV_BATTERY_TEMP_REGION__WARM && cap >= 60)) {
 			if(cap != 100 && !chip->chg_done) {
 				chip->limited = true;
 				qpnp_chg_charge_en(chip, 0);
@@ -8085,8 +8085,9 @@ static void update_heartbeat(struct work_struct *work)
 	qpnp_check_charge_timeout(chip);
 	qpnp_check_battery_uovp(chip);
 	qpnp_check_battery_temp(chip);
+	cap = get_prop_current_now(chip);
 
-	pr_debug("%s current:%d\n", __func__, get_prop_current_now(chip));
+	pr_debug("%s current:%d\n", __func__, cap);
 	
 #ifdef CONFIG_MACH_FIND7
 /* OPPO 2014-05-22 sjc Add for Find7s temp rising problem */

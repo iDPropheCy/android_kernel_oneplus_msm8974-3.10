@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -267,7 +267,7 @@ static unsigned long msm_cpp_queue_buffer_info(struct cpp_device *cpp_dev,
 	list_for_each_entry_safe(buff, save, buff_head, entry) {
 		if (buff->map_info.buff_info.index == buffer_info->index) {
 			pr_err("error buffer index already queued\n");
-			return -EINVAL;
+			goto error;
 		}
 	}
 
@@ -275,7 +275,7 @@ static unsigned long msm_cpp_queue_buffer_info(struct cpp_device *cpp_dev,
 		sizeof(struct msm_cpp_buffer_map_list_t), GFP_KERNEL);
 	if (!buff) {
 		pr_err("error allocating memory\n");
-		return -EINVAL;
+		goto error;
 	}
 
 	buff->map_info.buff_info = *buffer_info;
@@ -304,7 +304,7 @@ QUEUE_BUFF_ERROR2:
 QUEUE_BUFF_ERROR1:
 	buff->map_info.ion_handle = NULL;
 	kzfree(buff);
-
+error:
 	return 0;
 }
 
@@ -791,8 +791,11 @@ remap_failed:
 	msm_cam_clk_enable(&cpp_dev->pdev->dev, cpp_clk_info,
 		cpp_dev->cpp_clk, cpp_dev->num_clk, 0);
 clk_failed:
-	regulator_disable(cpp_dev->fs_cpp);
-	regulator_put(cpp_dev->fs_cpp);
+	if (cpp_dev->fs_cpp) {
+		regulator_disable(cpp_dev->fs_cpp);
+		regulator_put(cpp_dev->fs_cpp);
+		cpp_dev->fs_cpp = NULL;
+	}
 fs_failed:
 	msm_isp_deinit_bandwidth_mgr(ISP_CPP);
 bus_scale_register_failed:
@@ -1365,7 +1368,7 @@ static int msm_cpp_cfg(struct cpp_device *cpp_dev,
 			&buff_mgr_info);
 		if (rc < 0) {
 			rc = -EAGAIN;
-			pr_err("error getting buffer rc:%d\n", rc);
+			pr_err_ratelimited("error getting buffer rc:%d\n", rc);
 			goto ERROR2;
 		}
 		new_frame->output_buffer_info[0].index = buff_mgr_info.index;
@@ -2194,6 +2197,7 @@ static int cpp_probe(struct platform_device *pdev)
 	cpp_timer.data.cpp_dev = cpp_dev;
 	atomic_set(&cpp_timer.used, 0);
 	cpp_dev->fw_name_bin = NULL;
+	cpp_dev->fs_cpp = NULL;
 	if (rc == 0)
 		CPP_DBG("SUCCESS.");
 	else

@@ -19,6 +19,7 @@
 #include <linux/ktime.h>
 #include <linux/hrtimer.h>
 #include <linux/module.h>
+#include <trace/events/power.h>
 
 #include "cpuidle.h"
 
@@ -120,11 +121,6 @@ int cpuidle_idle_call(void)
 	struct cpuidle_driver *drv;
 	int next_state, entered_state;
 
-	if (need_resched()) {
-		local_irq_enable();
-		return 0;
-	}
-
 	if (off)
 		return -ENODEV;
 
@@ -151,6 +147,15 @@ int cpuidle_idle_call(void)
 		return 0;
 	}
 
+	trace_cpu_idle_rcuidle(next_state, dev->cpu);
+
+	if (need_resched()) {
+		dev->last_residency = 0;
+		local_irq_enable();
+		entered_state = next_state;
+		goto exit;
+	}
+
 	if (drv->states[next_state].flags & CPUIDLE_FLAG_TIMER_STOP)
 		clockevents_notify(CLOCK_EVT_NOTIFY_BROADCAST_ENTER,
 				   &dev->cpu);
@@ -164,6 +169,9 @@ int cpuidle_idle_call(void)
 	if (drv->states[next_state].flags & CPUIDLE_FLAG_TIMER_STOP)
 		clockevents_notify(CLOCK_EVT_NOTIFY_BROADCAST_EXIT,
 				   &dev->cpu);
+
+exit:
+	trace_cpu_idle_rcuidle(PWR_EVENT_EXIT, dev->cpu);
 
 	/* give the governor an opportunity to reflect on the outcome */
 	if (cpuidle_curr_governor->reflect)
@@ -530,10 +538,12 @@ EXPORT_SYMBOL_GPL(cpuidle_register);
 
 #ifdef CONFIG_SMP
 
+#if 0
 static void smp_callback(void *v)
 {
 	/* we already woke the CPU up, nothing more to do */
 }
+#endif
 
 /*
  * This function gets called when a part of the kernel has a new latency
@@ -544,7 +554,15 @@ static void smp_callback(void *v)
 static int cpuidle_latency_notify(struct notifier_block *b,
 		unsigned long l, void *v)
 {
+#if 0
+	/* when drivers request new latency requirement, it does not necessary
+	 * to immediately wake up another cpu by sending cross-cpu IPI, we can
+	 * consider the new latency to be taken into effect after next wakeup
+	 * from idle, this can save the unnecessary wakeup cost, and reduce the
+	 * risk that drivers may request latency in irq disabled context.
+	 */
 	smp_call_function(smp_callback, NULL, 1);
+#endif
 	return NOTIFY_OK;
 }
 
